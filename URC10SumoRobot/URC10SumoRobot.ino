@@ -6,17 +6,8 @@
  ********************************************************************************
  * DESCRIPTION:
  *
- * This example shows how to drive 2 motors using 4 PWM pins (2 for each motor)
- * with 2-channel motor driver.
+ * This is the example of Sumo Robot based on the URC10 Sumo Robot Controller.
  * 
- * 
- * CONNECTIONS:
- * 
- * Arduino D3  - Motor Driver PWM 1A Input
- * Arduino D9  - Motor Driver PWM 1B Input
- * Arduino D10 - Motor Driver PWM 2A Input
- * Arduino D11 - Motor Driver PWM 2B Input
- * Arduino GND - Motor Driver GND
  *
  *
  * AUTHOR   : Kong Wai Weng
@@ -26,49 +17,73 @@
  *
  *******************************************************************************/
 
-#include <IRremote.h>
 #include <CytronMotorDriver.h>
 
 
-
-// Pins assignment.
-#define BUTTON        13
-#define LED0          0
-#define LED1          1
-#define RECV_PIN      2
-#define LINE_L        12
-#define LINE_R        11
-#define OBSTACLE_L    3
-#define OBSTACLE_R    10
-#define OBSTACLE_FR   A0
-#define OBSTACLE_FC   A1
-#define OBSTACLE_FL   A2
+// Wiring Connections.
+#define LED0          0   // Onboard LED 0
+#define LED1          1   // Onboard LED 1
+#define BUTTON        13  // Start button
+#define EDGE_L        12  // Left edge sensor
+#define EDGE_R        11  // Right edge sensor
+#define OPPONENT_L    3   // Left opponent sensor
+#define OPPONENT_R    10  // Right opponent sensor
+#define OPPONENT_FR   A0  // Front right opponent sensor
+#define OPPONENT_FC   A1  // Front center opponent sensor
+#define OPPONENT_FL   A2  // Front left opponent sensor
 
 // Direction.
 #define LEFT    0
 #define RIGHT   1
 
-// IR Code.
-#define IR_CODE_OK    0xFF38C7
-
 
 // Global variables.
 uint8_t searchDir = LEFT;
-uint32_t timestamp = 0;
-decode_results results;
 
 
 // Configure the motor driver.
 CytronMD motorL(PWM_DIR, 5, 4);
 CytronMD motorR(PWM_DIR, 6, 7);
 
-// Configure the IR Remote Rx.
-IRrecv irrecv(RECV_PIN);
 
 
+/*******************************************************************************
+ * Start Routine
+ * This function should be called once only when the game start.
+ *******************************************************************************/
+ void startRoutine() {
+  // Start delay.
+  delay(1000);
 
-// U-Turn.
-void uTurn(uint8_t dir) {
+  // Turn right around 45 degress.
+  motorL.setSpeed(255);
+  motorR.setSpeed(0);
+  delay(180);
+
+  // Go straight.
+  motorL.setSpeed(255);
+  motorR.setSpeed(255);
+  delay(450);
+
+  // Turn left until opponent is detected.
+  motorL.setSpeed(-0);
+  motorR.setSpeed(255);
+  uint32_t startTimestamp = millis();
+  while (digitalRead(OPPONENT_FC)) {
+    // Quit if opponent is not found after timeout.
+    if (millis() - startTimestamp > 400) {
+      break;
+    }
+  }
+  
+ }
+
+
+/*******************************************************************************
+ * Back Off
+ * This function should be called when the ring edge is detected.
+ *******************************************************************************/
+void backoff(uint8_t dir) {
   // Stop the motors.
   motorL.setSpeed(0);
   motorR.setSpeed(0);
@@ -93,27 +108,40 @@ void uTurn(uint8_t dir) {
     motorR.setSpeed(-150);
   }
   delay(100);
+
+  // Start looking for opponent.
+  // Timeout after a short period.
   uint32_t uTurnTimestamp = millis();
   while (millis() - uTurnTimestamp < 300) {
-    if ( !(digitalRead(OBSTACLE_FC) && digitalRead(OBSTACLE_FL) && digitalRead(OBSTACLE_FR)) ) {
+    // Opponent is detected if either one of the opponent sensor is triggered.
+    if ( !digitalRead(OPPONENT_FC) ||
+         !digitalRead(OPPONENT_FL) ||
+         !digitalRead(OPPONENT_FR) ||
+         !digitalRead(OPPONENT_L) ||
+         !digitalRead(OPPONENT_R) ) {
+          
       // Stop the motors.
       motorL.setSpeed(0);
       motorR.setSpeed(0);
       delay(100);
 
+      // Return to the main loop and run the attach program.
       return;
     }
   }
 
-  // Move forward.
+  // If opponent is not found, move forward and continue searching in the main loop..
   motorL.setSpeed(255);
   motorR.setSpeed(255);
   delay(200);
 }
 
 
-
+/*******************************************************************************
+ * Search
+ *******************************************************************************/
 void search() {
+  // Move in circular motion.
   if (searchDir == LEFT) {
     motorL.setSpeed(100);
     motorR.setSpeed(255);
@@ -124,55 +152,78 @@ void search() {
 }
 
 
-
+/*******************************************************************************
+ * Attack
+ * Track and attack the opponent in full speed.
+ * Do nothing if opponent is not found.
+ *******************************************************************************/
 void attack() {
-  uint32_t straightTimestamp = millis();
-  
-  if (digitalRead(OBSTACLE_FC) == 0) {
+  uint32_t attackTimestamp = millis();
+
+  // Opponent in front center.
+  // Go straight in full speed.
+  if (!digitalRead(OPPONENT_FC)) {
     motorL.setSpeed(255);
     motorR.setSpeed(255);
   }
-  else if (digitalRead(OBSTACLE_L) == 0) {
-    motorL.setSpeed(-150);
-    motorR.setSpeed(150);
-    while (millis() - straightTimestamp < 400) {
-      if (digitalRead(OBSTACLE_FC) == 0) {
-        break;
-      }
-    }
-  }
-  else if (digitalRead(OBSTACLE_R) == 0) {
-    motorL.setSpeed(150);
-    motorR.setSpeed(-150);
-    while (millis() - straightTimestamp < 400) {
-      if (digitalRead(OBSTACLE_FC) == 0) {
-        break;
-      }
-    }
-  }
-  else if (digitalRead(OBSTACLE_FL) == 0) {
+
+  // Opponent in front left.
+  // Turn left.
+  else if (!digitalRead(OPPONENT_FL)) {
     motorL.setSpeed(0);
     motorR.setSpeed(255);
   }
-  else if (digitalRead(OBSTACLE_FR) == 0) {
+
+  // Opponent in front right.
+  // Turn right.
+  else if (!digitalRead(OPPONENT_FR)) {
     motorL.setSpeed(255);
     motorR.setSpeed(0);
   }
+
+  // Opponent in left side.
+  // Rotate left until opponent is in front.
+  else if (!digitalRead(OPPONENT_L)) {
+    motorL.setSpeed(-150);
+    motorR.setSpeed(150);
+    while (digitalRead(OPPONENT_FC)) {
+      // Quit if opponent is not found after timeout.
+      if (millis() - attackTimestamp > 400) {
+        break;
+      }
+    }
+  }
+
+  // Opponent in right side.
+  // Rotate right until opponent is in front.
+  else if (digitalRead(OPPONENT_R) == 0) {
+    motorL.setSpeed(150);
+    motorR.setSpeed(-150);
+    while (digitalRead(OPPONENT_FC)) {
+      // Quit if opponent is not found after timeout.
+      if (millis() - attackTimestamp > 400) {
+        break;
+      }
+    }
+  }
+  
 }
 
 
 
-// The setup routine runs once when you press reset.
+/*******************************************************************************
+ * Setup
+ * This function runs once after reset.
+ *******************************************************************************/
 void setup() {
   pinMode(BUTTON, INPUT_PULLUP);
-  pinMode(RECV_PIN, INPUT_PULLUP);
-  pinMode(LINE_L, INPUT_PULLUP);
-  pinMode(LINE_R, INPUT_PULLUP);
-  pinMode(OBSTACLE_L, INPUT_PULLUP);
-  pinMode(OBSTACLE_R, INPUT_PULLUP);
-  pinMode(OBSTACLE_FL, INPUT_PULLUP);
-  pinMode(OBSTACLE_FC, INPUT_PULLUP);
-  pinMode(OBSTACLE_FR, INPUT_PULLUP);
+  pinMode(EDGE_L, INPUT_PULLUP);
+  pinMode(EDGE_R, INPUT_PULLUP);
+  pinMode(OPPONENT_L, INPUT_PULLUP);
+  pinMode(OPPONENT_R, INPUT_PULLUP);
+  pinMode(OPPONENT_FL, INPUT_PULLUP);
+  pinMode(OPPONENT_FC, INPUT_PULLUP);
+  pinMode(OPPONENT_FR, INPUT_PULLUP);
 
   pinMode(LED0, OUTPUT);
   pinMode(LED1, OUTPUT);
@@ -186,88 +237,81 @@ void setup() {
   motorL.setSpeed(0);
   motorR.setSpeed(0);
 
-  // Initialize the IR remote receiver.
-  irrecv.enableIRIn();
-
-  // Wait until ok signal is received.
-  do {
-    if (irrecv.decode(&results)){
-      irrecv.resume();
+  // Wait until button is pressed.
+  while (digitalRead(BUTTON)) {
+    // While waiting, show the status of the edge sensor for easy calibration.
+    if (!digitalRead(EDGE_L)) {
+       digitalWrite(LED1, LOW);
+    } else {
+      digitalWrite(LED1, HIGH);
     }
-  } while (results.value != IR_CODE_OK);
 
-  
+    if (!digitalRead(EDGE_R)) {
+       digitalWrite(LED0, LOW);
+    } else {
+      digitalWrite(LED0, HIGH);
+    }
+  }
+
+  // Wait until button is released.
+  while (!digitalRead(BUTTON));
+
+  // Turn on the LEDs.
   digitalWrite(LED0, LOW);
-  
-
-  // Start delay.
-  delay(1000);
-
-
   digitalWrite(LED1, LOW);
   
-  timestamp = millis();
+  // Start routine..
+  startRoutine();
 }
 
 
-// The loop routine runs over and over again forever.
+/*******************************************************************************
+ * Main program loop.
+ *******************************************************************************/
 void loop() {
-//  if (digitalRead(LINE_L)) {
-//    digitalWrite(0, HIGH);
-//  } else {
-//    digitalWrite(0, LOW);
-//  }
-//
-//  if (digitalRead(LINE_R)) {
-//    digitalWrite(1, HIGH);
-//  } else {
-//    digitalWrite(1, LOW);
-//  }
-//
-//  return;
+  // Edge is detected on the left.
+  if (!digitalRead(EDGE_L)) {
+    // Back off and make a U-Turn to the right.
+    backoff(RIGHT);
+
+    // Toggle the search direction.
+    searchDir ^= 1;
+  }
   
-  if (!digitalRead(LINE_L)) {
-    uTurn(RIGHT);
+  // Edge is detected on the right.
+  else if (!digitalRead(EDGE_R)) {
+    // Back off and make a U-Turn to the right.
+    backoff(LEFT);
+    
+    // Toggle the search direction.
     searchDir ^= 1;
   }
-  else if (!digitalRead(LINE_R)) {
-    uTurn(LEFT);
-    searchDir ^= 1;
-  }
+
+  // Edge is not detected.
   else {
-    // If opponent is not detected.
-    if ( digitalRead(OBSTACLE_FC) &&
-         digitalRead(OBSTACLE_FL) &&
-         digitalRead(OBSTACLE_FR) &&
-         digitalRead(OBSTACLE_L) &&
-         digitalRead(OBSTACLE_R) ) {
+    // Keep searching if opponent is not detected.
+    if ( digitalRead(OPPONENT_FC) &&
+         digitalRead(OPPONENT_FL) &&
+         digitalRead(OPPONENT_FR) &&
+         digitalRead(OPPONENT_L) &&
+         digitalRead(OPPONENT_R) ) {
       search();
-    } else {
+    }
+    
+    // Attack if opponent is in view.
+    else {
       attack();
     }
   }
 
+  // Stop the robot if the button is pressed.
+  if (!digitalRead(BUTTON)) {
+    // Stop the motors.
+    motorL.setSpeed(0);
+    motorR.setSpeed(0);
 
-  // Stop if ok signal received.
-  if (irrecv.decode(&results)) {
-    if (results.value == IR_CODE_OK) {
-      // Stop the motors.
-      motorL.setSpeed(0);
-      motorR.setSpeed(0);
-
-      // Turn off both LEDs.
-      digitalWrite(LED0, HIGH);
-      digitalWrite(LED1, HIGH);
-      while (1);
-    }
-    irrecv.resume();
+    // Loop forever here.
+    while (1);
   }
 
-  
-//  if (millis() - timestamp > 10000) {
-//    // Stop the motors.
-//    motorL.setSpeed(0);
-//    motorR.setSpeed(0);
-//    while (1);
-//  }
 }
